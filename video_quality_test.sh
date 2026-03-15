@@ -9,9 +9,11 @@ usage() {
     echo "        -o, --original FILE          Путь к оригинальному видео"
     echo "        -d, --distorted FILE         Путь к тестируемому видео (можно указывать несколько раз)"
     echo ""
-    echo "Прочие опции:"
-    echo "        -m, --metrics LIST           Метрики через запятую: vmaf,psnr,ssim (по умолчанию: все)"
+    echo "Необязательные опции:"
+    echo "        -m, --metrics LIST           Метрики для расчёта: vmaf,psnr,ssim (по умолчанию: все три)"
     echo "        -p, --output-dir DIR         Каталог для сохранения отчётов (по умолчанию: ~/vqt_reports)"
+    echo ""
+    echo "Прочие опции:"
     echo "        -h, --help                   Показать эту справку"
     exit 0
 }
@@ -33,6 +35,35 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# --- Валидация аргументов ---
+if [[ -z "$ORIGINAL" ]]; then
+    echo "Ошибка: не указан оригинал (-o / --original)" >&2; exit 1
+fi
+if [[ ${#DISTORTED_FILES[@]} -eq 0 ]]; then
+    echo "Ошибка: не указано ни одного тестируемого файла (-d / --distorted)" >&2; exit 1
+fi
+if [[ ! -f "$ORIGINAL" ]]; then
+    echo "Ошибка: файл оригинала не найден: $ORIGINAL" >&2; exit 1
+fi
+for F in "${DISTORTED_FILES[@]}"; do
+    if [[ ! -f "$F" ]]; then
+        echo "Ошибка: файл не найден: $F" >&2; exit 1
+    fi
+done
+
+# --- Валидация метрик ---
+VALID_METRICS=("vmaf" "psnr" "ssim")
+IFS=',' read -ra REQUESTED_METRICS <<< "$METRICS"
+for M in "${REQUESTED_METRICS[@]}"; do
+    VALID=false
+    for V in "${VALID_METRICS[@]}"; do
+        [[ "$M" == "$V" ]] && VALID=true && break
+    done
+    if ! $VALID; then
+        echo "Ошибка: неизвестная метрика '$M'. Доступные: vmaf, psnr, ssim" >&2; exit 1
+    fi
+done
+
 # --- Определяем какие метрики считать ---
 DO_VMAF=false; DO_PSNR=false; DO_SSIM=false
 [[ "$METRICS" == *"vmaf"* ]] && DO_VMAF=true
@@ -40,7 +71,7 @@ DO_VMAF=false; DO_PSNR=false; DO_SSIM=false
 [[ "$METRICS" == *"ssim"* ]] && DO_SSIM=true
 
 # --- Создаём каталог если не существует ---
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR" || { echo "Ошибка: не удалось создать каталог: $OUTPUT_DIR" >&2; exit 1; }
 
 # --- Имя файла отчёта: дата + короткий хэш ---
 DATE=$(date +"%Y%m%d_%H%M%S")
