@@ -1,0 +1,18 @@
+# Отчёты, генерируемые скриптом
+result_vqt_*.md
+
+# Временные файлы VMAF
+/tmp/vmaf_*.json
+
+# Видеофайлы (не коммитим тестовые материалы)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.ts
+*.m2ts
+
+# Системное (macOS, Linux)
+.DS_Store
+Thumbs.db
