@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
 # Использование: ./video_quality_test.sh -o <оригинал> -d <тестируемое>
 
+# --- Справка ---
+usage() {
+    echo "Использование: video_quality_test.sh [ОПЦИИ] -o ОРИГИНАЛ -d ТЕСТ_1]"
+    echo ""
+    echo "Обязательные опции:"
+    echo "        -o, --original FILE    Путь к оригинальному видео"
+    echo "        -d, --distorted FILE   Путь к тестируемому видео"
+    echo ""
+    echo "Прочие опции:"
+    echo "        -h, --help             Показать эту справку"
+    exit 0
+}
+
 # --- Аргументы ---
-while getopts "o:d:" opt; do
-    case $opt in
-        o) ORIGINAL="$OPTARG" ;;  # Оригинальное (эталонное) видео
-        d) DISTORTED="$OPTARG" ;; # Тестируемое (сжатое/обработанное) видео
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--original)  ORIGINAL="$2";  shift 2 ;;
+        -d|--distorted) DISTORTED="$2"; shift 2 ;;
+        -h|--help)      usage ;;
+        *) shift ;;
     esac
 done
 
@@ -29,7 +44,7 @@ import json
 with open('$TMP_JSON') as f:
     d = json.load(f)
 print(f\"{d['pooled_metrics']['vmaf']['mean']:.2f}\")
-")
+") || { rm -f "$TMP_JSON"; exit 1; }
 
 # --- Запись отчёта ---
 cat > "$REPORT" <<MD
@@ -37,7 +52,7 @@ cat > "$REPORT" <<MD
 
 | | |
 |---|---|
-| **Дата** | $(date "+%d.%m.%Y %H:%M:%S") |
+| **Дата** | $(date "+%d.%m.%Y %H:%М:%S") |
 | **Оригинал** | \`$ORIGINAL\` |
 | **Тест** | \`$DISTORTED\` |
 | **VMAF** | $VMAF / 100 |
