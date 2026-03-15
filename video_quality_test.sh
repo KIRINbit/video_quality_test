@@ -6,31 +6,38 @@ usage() {
     echo "Использование: video_quality_test.sh [ОПЦИИ] -o ОРИГИНАЛ -d ТЕСТ_1 [-d ТЕСТ_2 ...]"
     echo ""
     echo "Обязательные опции:"
-    echo "        -o, --original FILE      Путь к оригинальному видео"
-    echo "        -d, --distorted FILE     Путь к тестируемому видео (можно указывать несколько раз)"
+    echo "        -o, --original FILE          Путь к оригинальному видео"
+    echo "        -d, --distorted FILE         Путь к тестируемому видео (можно указывать несколько раз)"
     echo ""
     echo "Прочие опции:"
-    echo "        -p, --output-dir DIR     Каталог для сохранения отчётов (по умолчанию: ~/vqt_reports)"
-    echo "        -h, --help               Показать эту справку"
+    echo "        -m, --metrics LIST           Метрики через запятую: vmaf,psnr,ssim (по умолчанию: все)"
+    echo "        -p, --output-dir DIR         Каталог для сохранения отчётов (по умолчанию: ~/vqt_reports)"
+    echo "        -h, --help                   Показать эту справку"
     exit 0
 }
 
-# --- Каталог для отчётов по умолчанию ---
+# --- Значения по умолчанию ---
 OUTPUT_DIR="$HOME/vqt_reports"
-
-# --- Массив тестируемых файлов ---
+METRICS="vmaf,psnr,ssim"
 DISTORTED_FILES=()
 
 # --- Аргументы ---
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -o|--original)   ORIGINAL="$2";                  shift 2 ;;
-        -d|--distorted)  DISTORTED_FILES+=("$2");         shift 2 ;;
-        -p|--output-dir) OUTPUT_DIR="$2";                 shift 2 ;;
+        -o|--original)   ORIGINAL="$2";           shift 2 ;;
+        -d|--distorted)  DISTORTED_FILES+=("$2"); shift 2 ;;
+        -m|--metrics)    METRICS="$2";             shift 2 ;;
+        -p|--output-dir) OUTPUT_DIR="$2";          shift 2 ;;
         -h|--help)       usage ;;
         *) shift ;;
     esac
 done
+
+# --- Определяем какие метрики считать ---
+DO_VMAF=false; DO_PSNR=false; DO_SSIM=false
+[[ "$METRICS" == *"vmaf"* ]] && DO_VMAF=true
+[[ "$METRICS" == *"psnr"* ]] && DO_PSNR=true
+[[ "$METRICS" == *"ssim"* ]] && DO_SSIM=true
 
 # --- Создаём каталог если не существует ---
 mkdir -p "$OUTPUT_DIR"
@@ -45,47 +52,95 @@ cat > "$REPORT" <<MD
 # Video Quality Report
 
 **Дата:** $(date "+%d.%m.%Y %H:%M:%S")  
-**Оригинал:** \`$ORIGINAL\`
+**Оригинал:** \`$ORIGINAL\`  
+**Метрики:** $METRICS
 
 ---
 
 MD
 
-# --- Прогон VMAF для каждого тестируемого файла ---
+# --- Прогон метрик для каждого тестируемого файла ---
 for DISTORTED in "${DISTORTED_FILES[@]}"; do
     echo "Обработка: $DISTORTED"
 
-    TMP_JSON=$(mktemp /tmp/vmaf_XXXXXX.json)
+    TMP_VMAF=$(mktemp /tmp/vmaf_XXXXXX.json)
+    TMP_PSNR=$(mktemp /tmp/psnr_XXXXXX.log)
+    TMP_SSIM=$(mktemp /tmp/ssim_XXXXXX.log)
 
-    # --- Запуск VMAF через ffmpeg ---
-    ffmpeg -hide_banner -loglevel warning \
-        -i "$DISTORTED" -i "$ORIGINAL" \
-        -lavfi "[0:v][1:v]libvmaf=log_fmt=json:log_path=${TMP_JSON}" \
-        -f null - || { rm -f "$TMP_JSON" "$REPORT"; exit 1; }
+    VMAF_SCORE="—"; PSNR_SCORE="—"; SSIM_SCORE="—"
 
-    # --- Извлечение среднего VMAF из JSON ---
-    VMAF=$(python3 -c "
+    if $DO_VMAF; then
+        ffmpeg -hide_banner -loglevel warning \
+            -i "$DISTORTED" -i "$ORIGINAL" \
+            -lavfi "[0:v][1:v]libvmaf=log_fmt=json:log_path=${TMP_VMAF}" \
+            -f null - || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+
+        VMAF_SCORE=$(python3 -c "
 import json
-with open('$TMP_JSON') as f:
+with open('$TMP_VMAF') as f:
     d = json.load(f)
-print(f\"{d['pooled_metrics']['vmaf']['mean']:.2f}\")
-") || { rm -f "$TMP_JSON" "$REPORT"; exit 1; }
+print(f\"{d['pooled_metrics']['vmaf']['mean']:.4f}\")
+") || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+    fi
+
+    if $DO_PSNR; then
+        ffmpeg -hide_banner -loglevel warning \
+            -i "$DISTORTED" -i "$ORIGINAL" \
+            -lavfi "[0:v][1:v]psnr=stats_file=${TMP_PSNR}" \
+            -f null - || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+
+        # Извлекаем среднее значение PSNR
+        PSNR_SCORE=$(python3 -c "
+import re
+values = []
+with open('$TMP_PSNR') as f:
+    for line in f:
+        m = re.search(r'psnr_avg:([0-9.]+)', line)
+        if m:
+            values.append(float(m.group(1)))
+print(f'{sum(values)/len(values):.4f}' if values else '—')
+") || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+    fi
+
+    if $DO_SSIM; then
+        ffmpeg -hide_banner -loglevel warning \
+            -i "$DISTORTED" -i "$ORIGINAL" \
+            -lavfi "[0:v][1:v]ssim=stats_file=${TMP_SSIM}" \
+            -f null - || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+
+        # Извлекаем среднее значение SSIM
+        SSIM_SCORE=$(python3 -c "
+import re
+values = []
+with open('$TMP_SSIM') as f:
+    for line in f:
+        m = re.search(r'All:([0-9.]+)', line)
+        if m:
+            values.append(float(m.group(1)))
+print(f'{sum(values)/len(values):.4f}' if values else '—')
+") || { rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM" "$REPORT"; exit 1; }
+    fi
 
     # --- Добавляем результат в отчёт ---
     cat >> "$REPORT" <<MD
 ## \`$(basename "$DISTORTED")\`
 
-| | |
-|---|---|
-| **Путь** | \`$DISTORTED\` |
-| **VMAF** | $VMAF / 100 |
-
----
-
+| Метрика | Значение |
+|---------|----------|
 MD
 
-    echo "VMAF: $VMAF"
-    rm -f "$TMP_JSON"
+    $DO_VMAF && echo "| **VMAF** | $VMAF_SCORE / 100 |" >> "$REPORT"
+    $DO_PSNR && echo "| **PSNR** | $PSNR_SCORE dB |"   >> "$REPORT"
+    $DO_SSIM && echo "| **SSIM** | $SSIM_SCORE |"       >> "$REPORT"
+
+    echo "" >> "$REPORT"
+    echo "**Путь:** \`$DISTORTED\`" >> "$REPORT"
+    echo "" >> "$REPORT"
+    echo "---" >> "$REPORT"
+    echo "" >> "$REPORT"
+
+    echo "  VMAF: $VMAF_SCORE | PSNR: $PSNR_SCORE | SSIM: $SSIM_SCORE"
+    rm -f "$TMP_VMAF" "$TMP_PSNR" "$TMP_SSIM"
 done
 
 echo "Отчёт сохранён: $REPORT"
